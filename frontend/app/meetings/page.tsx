@@ -32,7 +32,9 @@ export default function MeetingsPage() {
         <div><div className="eyebrow">YOUR WORKSPACE</div><h1>Meetings</h1><p>Spaces you organize or have been invited to.</p></div>
         <div className="meetings-heading-actions">
           <Link className="button button-quiet" href="/profile"><span aria-hidden="true">←</span> Back to profile</Link>
-          {user?.role === "Workspace administrator" && <Link className="button button-primary meeting-create-link" href="/meetings/new">Create meeting <span aria-hidden="true">↗</span></Link>}
+          {user && (user.role === "Workspace administrator" || user.role === "Meeting organiser") && (
+            <Link className="button button-primary meeting-create-link" href="/meetings/new">Create meeting <span aria-hidden="true">↗</span></Link>
+          )}
         </div>
       </div>
 

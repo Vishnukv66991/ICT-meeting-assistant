@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
-import { createMeeting, getCurrentUser, getErrorMessage, getWorkspaceUsers, type MeetingRole, type User } from "@/lib/api";
+import { createMeeting, getApprovedMembers, getCurrentUser, getErrorMessage, type MeetingRole, type User } from "@/lib/api";
 
 const meetingRoles: MeetingRole[] = ["Meeting participant", "Meeting organiser", "Reviewer/editor"];
 
@@ -19,12 +19,12 @@ export default function CreateMeetingPage() {
   useEffect(() => {
     getCurrentUser()
       .then(async (user) => {
-        if (user.role !== "Workspace administrator") {
-          setError("Only a workspace administrator can create a meeting space.");
+        if (user.role !== "Workspace administrator" && user.role !== "Meeting organiser") {
+          setError("Only a meeting organiser or workspace administrator can create a meeting space.");
           return;
         }
         setCurrentUser(user);
-        setUsers((await getWorkspaceUsers()).filter((member) => member.approval_status === "approved"));
+        setUsers(await getApprovedMembers());
       })
       .catch((caught: unknown) => {
         if (caught instanceof Error && caught.message === "Sign in required") {
@@ -72,7 +72,7 @@ export default function CreateMeetingPage() {
     <section className="meeting-form-page">
       <div className="meeting-form-heading">
         <Link className="button button-quiet meeting-back-button" href="/meetings"><span aria-hidden="true">←</span> Back to meetings</Link>
-        <div className="eyebrow">WORKSPACE ADMINISTRATION</div>
+        <div className="eyebrow">MEETING WORKSPACE</div>
         <h1>Create a meeting space</h1>
         <p>Choose approved participants for this meeting space. You can start its group video call from the space after it’s created.</p>
       </div>

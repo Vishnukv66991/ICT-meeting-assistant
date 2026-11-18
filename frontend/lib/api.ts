@@ -133,16 +133,38 @@ export function getMeetingCallSocketUrl(meetingId: number) {
   return `${apiUrl.origin}/api/meetings/${meetingId}/call`;
 }
 
+export function getApprovedMembers() {
+  return request<User[]>("/api/meetings/members");
+}
+
 export async function createMeeting(payload: {
   title: string;
   starts_at: string;
   agenda: string;
   participants: Array<{ user_id: number; role: MeetingRole }>;
 }) {
-  return request<Meeting>("/api/admin/meetings", {
+  return request<Meeting>("/api/meetings", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(payload),
+  });
+}
+
+export async function addMeetingParticipant(
+  meetingId: number,
+  payload: { user_id: number; role: MeetingRole }
+) {
+  return request<Meeting>(`/api/meetings/${meetingId}/participants`, {
+    method: "POST",
+    headers: await csrfHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeMeetingParticipant(meetingId: number, userId: number) {
+  return request<void>(`/api/meetings/${meetingId}/participants/${userId}`, {
+    method: "DELETE",
+    headers: await csrfHeaders(),
   });
 }
 

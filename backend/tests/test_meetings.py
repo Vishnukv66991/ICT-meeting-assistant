@@ -265,3 +265,78 @@ def test_delete_meeting_and_remove_user_succeeds(client):
 
     csrf_token = client.get("/api/auth/csrf").json()["csrf_token"]
     assert client.delete(f"/api/admin/users/{user_id}", headers={"X-CSRF-Token": csrf_token}).status_code == 204
+
+
+def test_meeting_organiser_can_create_meeting_and_manage_participants(client):
+    with Session(main.engine) as database:
+        organiser = create_account(database, "Sarah Organiser", "sarah@example.com", "Meeting organiser")
+        attendee = create_account(database, "Bob Attendee", "bob@example.com", "Meeting participant")
+        extra_user = create_account(database, "Charlie Extra", "charlie@example.com", "Meeting participant")
+        regular_user = create_account(database, "David Regular", "david@example.com", "Meeting participant")
+        organiser_id = organiser.id
+        attendee_id = attendee.id
+        extra_user_id = extra_user.id
+        regular_user_id = regular_user.id
+        database.commit()
+
+    # 1. Login as Organiser
+    assert login(client, "sarah@example.com").status_code == 200
+
+    # 2. Organiser can view approved workspace members
+    members_resp = client.get("/api/meetings/members")
+    assert members_resp.status_code == 200
+    assert len(members_resp.json()) >= 4
+
+    # 3. Organiser can create a meeting space
+    csrf_token = client.get("/api/auth/csrf").json()["csrf_token"]
+    create_resp = client.post(
+        "/api/meetings",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "title": "Sarah's Planning Workshop",
+            "starts_at": "2026-11-20T10:00:00Z",
+            "agenda": "Organise sprint backlog",
+            "participants": [{"user_id": attendee_id, "role": "Meeting participant"}],
+        },
+    )
+    assert create_resp.status_code == 201
+    meeting = create_resp.json()
+    meeting_id = meeting["id"]
+    assert meeting["title"] == "Sarah's Planning Workshop"
+    assert meeting["created_by_id"] == organiser_id
+
+    # 4. Organiser can add/approve people into the meeting
+    csrf_token = client.get("/api/auth/csrf").json()["csrf_token"]
+    add_resp = client.post(
+        f"/api/meetings/{meeting_id}/participants",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"user_id": extra_user_id, "role": "Reviewer/editor"},
+    )
+    assert add_resp.status_code == 200
+    participant_ids = {p["id"] for p in add_resp.json()["participants"]}
+    assert extra_user_id in participant_ids
+
+    # 5. Organiser can remove a participant from the meeting
+    csrf_token = client.get("/api/auth/csrf").json()["csrf_token"]
+    del_resp = client.delete(
+        f"/api/meetings/{meeting_id}/participants/{attendee_id}",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert del_resp.status_code == 204
+
+    # 6. Regular participant CANNOT create meetings
+    csrf_token = client.get("/api/auth/csrf").json()["csrf_token"]
+    client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf_token})
+    assert login(client, "david@example.com").status_code == 200
+    csrf_token = client.get("/api/auth/csrf").json()["csrf_token"]
+    blocked_resp = client.post(
+        "/api/meetings",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "title": "Unauthorized Meeting",
+            "starts_at": "2026-11-20T10:00:00Z",
+            "participants": [],
+        },
+    )
+    assert blocked_resp.status_code == 403
+

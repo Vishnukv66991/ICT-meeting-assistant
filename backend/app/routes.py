@@ -15,6 +15,7 @@ from .schemas import (
     AdminRoleUpdate,
     LoginRequest,
     MeetingCreateRequest,
+    MeetingInviteRequest,
     MeetingParticipantResponse,
     MeetingResponse,
     ProfileUpdate,
@@ -94,6 +95,15 @@ def current_user(request: Request, database: Session = Depends(get_db)) -> User:
 def require_admin(user: User = Depends(current_user)) -> User:
     if user.role != "Workspace administrator":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator access required")
+    return user
+
+
+def require_meeting_creator(user: User = Depends(current_user)) -> User:
+    if user.role not in {"Workspace administrator", "Meeting organiser"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a meeting organiser or workspace administrator can create meetings",
+        )
     return user
 
 
@@ -326,11 +336,34 @@ def meeting_response(meeting: Meeting, database: Session) -> MeetingResponse:
     )
 
 
+def check_meeting_manager(meeting: Meeting, user: User, database: Session) -> bool:
+    if user.role == "Workspace administrator" or meeting.created_by_id == user.id:
+        return True
+    membership_role = database.scalar(
+        select(MeetingParticipant.role).where(
+            MeetingParticipant.meeting_id == meeting.id,
+            MeetingParticipant.user_id == user.id,
+        )
+    )
+    return membership_role == "Meeting organiser"
+
+
+@meetings_router.get("/members", response_model=list[UserResponse])
+def list_approved_members(
+    _user: User = Depends(current_user),
+    database: Session = Depends(get_db),
+):
+    return database.scalars(
+        select(User).where(User.approval_status == "approved").order_by(User.full_name)
+    ).all()
+
+
+@meetings_router.post("", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
 @admin_router.post("/meetings", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
 def create_meeting(
     payload: MeetingCreateRequest,
     _csrf: None = Depends(require_csrf),
-    admin: User = Depends(require_admin),
+    creator: User = Depends(require_meeting_creator),
     database: Session = Depends(get_db),
 ):
     title = payload.title.strip()
@@ -339,7 +372,7 @@ def create_meeting(
     invite_ids = [invite.user_id for invite in payload.participants]
     if len(invite_ids) != len(set(invite_ids)):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A user can only be invited once")
-    if admin.id in invite_ids:
+    if creator.id in invite_ids:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The meeting creator is added automatically")
     if invite_ids:
         approved_ids = set(
@@ -357,11 +390,11 @@ def create_meeting(
         title=title,
         starts_at=payload.starts_at,
         agenda=payload.agenda.strip(),
-        created_by_id=admin.id,
+        created_by_id=creator.id,
     )
     database.add(meeting)
     database.flush()
-    database.add(MeetingParticipant(meeting_id=meeting.id, user_id=admin.id, role="Meeting organiser"))
+    database.add(MeetingParticipant(meeting_id=meeting.id, user_id=creator.id, role="Meeting organiser"))
     database.add_all(
         MeetingParticipant(meeting_id=meeting.id, user_id=invite.user_id, role=invite.role)
         for invite in payload.participants
@@ -369,6 +402,68 @@ def create_meeting(
     database.commit()
     database.refresh(meeting)
     return meeting_response(meeting, database)
+
+
+@meetings_router.post("/{meeting_id}/participants", response_model=MeetingResponse)
+def add_meeting_participant(
+    meeting_id: int,
+    payload: MeetingInviteRequest,
+    _csrf: None = Depends(require_csrf),
+    user: User = Depends(current_user),
+    database: Session = Depends(get_db),
+):
+    meeting = database.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+
+    if not check_meeting_manager(meeting, user, database):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a meeting organiser or workspace administrator can manage participants",
+        )
+
+    target_user = database.get(User, payload.user_id)
+    if target_user is None or target_user.approval_status != "approved":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="User is not approved in this workspace")
+
+    existing_participant = database.get(MeetingParticipant, (meeting_id, payload.user_id))
+    if existing_participant is not None:
+        existing_participant.role = payload.role
+    else:
+        database.add(MeetingParticipant(meeting_id=meeting_id, user_id=payload.user_id, role=payload.role))
+
+    database.commit()
+    database.refresh(meeting)
+    return meeting_response(meeting, database)
+
+
+@meetings_router.delete("/{meeting_id}/participants/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_meeting_participant(
+    meeting_id: int,
+    user_id: int,
+    _csrf: None = Depends(require_csrf),
+    user: User = Depends(current_user),
+    database: Session = Depends(get_db),
+):
+    meeting = database.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+
+    if not check_meeting_manager(meeting, user, database):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a meeting organiser or workspace administrator can manage participants",
+        )
+
+    if meeting.created_by_id == user_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The meeting creator cannot be removed")
+
+    participant = database.get(MeetingParticipant, (meeting_id, user_id))
+    if participant is not None:
+        database.delete(participant)
+        database.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @meetings_router.get("", response_model=list[MeetingResponse])
