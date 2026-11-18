@@ -20,6 +20,10 @@ async def lifespan(_app: FastAPI):
         "meeting_participants": {
             "role": "VARCHAR(40) NOT NULL DEFAULT 'Meeting participant'",
         },
+        "meetings": {
+            "code": "VARCHAR(30)",
+            "passcode": "VARCHAR(30) NOT NULL DEFAULT '123456'",
+        },
     }
     with engine.begin() as connection:
         for table_name, columns in migrations.items():
@@ -27,6 +31,13 @@ async def lifespan(_app: FastAPI):
             for column_name, definition in columns.items():
                 if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"))
+        # Ensure any existing meetings without code get a unique code
+        existing_cols = {column["name"] for column in inspect(connection).get_columns("meetings")}
+        if "code" in existing_cols:
+            rows = connection.execute(text("SELECT id FROM meetings WHERE code IS NULL")).fetchall()
+            for row in rows:
+                generated = models.generate_meeting_code()
+                connection.execute(text(f"UPDATE meetings SET code = '{generated}' WHERE id = {row[0]}"))
     yield
 
 

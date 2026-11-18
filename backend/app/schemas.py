@@ -80,11 +80,18 @@ class MeetingParticipantResponse(BaseModel):
 class MeetingResponse(BaseModel):
     id: int
     title: str
+    code: str
+    passcode: str
     starts_at: datetime
     agenda: str
     created_by_id: int
     created_at: datetime
     participants: list[MeetingParticipantResponse]
+
+
+class JoinMeetingRequest(BaseModel):
+    code: str = Field(min_length=3, max_length=50)
+    passcode: str = Field(min_length=1, max_length=50)
 
 
 class UserResponse(BaseModel):
